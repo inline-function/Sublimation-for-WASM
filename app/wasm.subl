@@ -1,0 +1,11 @@
+// wasm.subl —— SfW 宿主桥接声明（Phase 0）
+//
+// 桥接模型（与 SfA 的 __dshAndroid 桥、SfG 的 @game 桥同构）：
+// @wasm @host @impure 无体声明 → 编译器把调用点翻成裸名全局 JS 调用 →
+// 运行期由 wasm 宿主（wasm-app/js/wasm-runtime.js，QuickJS-in-WASM）提供同名全局函数。
+//
+// 白名单见 annotation processer/wasm.subs（名字必须与宿主实现一一对应）。
+
+@wasm @host @impure fun wasmName(): Str
+@wasm @host @impure fun wasmTimeMs(): Nat
+@wasm @host @impure fun wasmEnv(key: Str): Str

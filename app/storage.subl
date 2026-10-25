@@ -1,0 +1,13 @@
+// storage.subl —— SfW 宿主存储桥（Phase 1）
+//
+// wasm 宿主侧的键值存储：同步、按宿主实现落地（Node 宿主=进程内 Map，
+// 浏览器宿主=localStorage/IndexedDB——见 wasm doc/宿主规范.md）。
+// 键和值都是 Str：上层结构化数据用 JSON 字符串（core.json）自行编码。
+// 白名单与平台边界见 annotation processer/wasm.subs 与 wasm doc/平台边界.md。
+
+@wasm @host @impure fun wasmStorageLoad(key: Str): Optional[Str]
+@wasm @host @impure fun wasmStorageStore(key: Str, value: Str): Null
+@wasm @host @impure fun wasmStorageHas(key: Str): Bool
+@wasm @host @impure fun wasmStorageRemove(key: Str): Null
+@wasm @host @impure fun wasmStorageKeys(): List[Str]
+@wasm @host @impure fun wasmStorageClear(): Null

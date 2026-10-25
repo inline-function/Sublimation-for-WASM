@@ -1,0 +1,38 @@
+// main.subl —— SfW 演示（Phase 0 回归基线 + Phase 1 存储桥）
+//
+// 前 7 行输出是 Phase 0 冒烟的回归基线（逐字保持，见 test/smoke-test.js 的 11 项断言）；
+// 追加部分演示宿主存储桥（wasmStorage*）的往返、键集合与删除。
+
+fun fib(n: Nat): Nat = if (n < 2) n else fib(n - 1) + fib(n - 2)
+
+// 链表求和（core.collection 的原生写法）
+fun sum(xs: List[Nat]): Nat = when(xs) {
+    Nil => 0
+    is Cons(h, t) => h + sum(t)
+}
+
+@impure
+fun main(): Null {
+    print("SfW Phase 0: hello from Sublimation, running inside WASM (QuickJS)")
+    print(concat("host: ", wasmName()))
+    var t0: Nat = wasmTimeMs()
+    var f: Nat = fib(25)
+    print(concat("fib(25) = ", toStr(f)))
+    var xs: List[Nat] = map(range(1, 11), { x => x * x })
+    print(concat("squares = ", toStr(xs)))
+    print(concat("sum of squares = ", toStr(sum(xs))))
+    print(concat("elapsed ms = ", toStr(wasmTimeMs() - t0)))
+    print(concat("env phase = ", wasmEnv("phase")))
+    // ---- Phase 1：宿主存储桥 ----
+    wasmStorageStore("fib25", toStr(f))
+    when (wasmStorageLoad("fib25")) {
+        is Some(v) => print(concat("storage roundtrip: ", v))
+        Nil => print("storage: load returned None (unexpected)")
+    }
+    print(concat("storage keys: ", toStr(wasmStorageKeys())))
+    print(concat("storage has fib25: ", toStr(wasmStorageHas("fib25"))))
+    wasmStorageRemove("fib25")
+    print(concat("after remove has fib25: ", toStr(wasmStorageHas("fib25"))))
+    print(concat("storage keys after remove: ", toStr(wasmStorageKeys())))
+    null
+}

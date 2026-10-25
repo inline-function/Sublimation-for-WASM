@@ -1,0 +1,4 @@
+# 本地运行环境副本（真源=主仓 core/；由 scripts/sync-deps.ps1 同步）
+core/
+# 编译/打包产物
+wasm-app/build/

@@ -1,0 +1,13 @@
+// net.subl —— SfW 网络能力前瞻声明（Phase 1；实现待宿主异步化）
+//
+// 前瞻声明（forward declaration）：签名先立起来，让应用层可以按这个形状写代码，
+// 但本阶段宿主尚未实现——调用会在运行期得到明确的「不可用」错误。
+// 原因：同步 QuickJS 宿主（release-sync 变体）无法在桥内等待网络 IO；
+// 落地需要二选一（见 wasm doc/宿主规范.md §6）：
+//   (a) 采用 asyncify 变体（宿主可 yield）；
+//   (b) deferred-promise 协议（宿主返回 pending promise，装载后由宿主resolve、
+//       再由 executePendingJobs 恢复 awaiting 协程）。
+// 与 fetch 的取舍一致：Result[Str, Str] 让 Err 通道承载网络失败，
+// 而不是抛异常（Sublimation 的效应纪律）。
+
+@wasm @host @impure @async fun wasmFetch(url: Str): Result[Str, Str]

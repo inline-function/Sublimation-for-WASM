@@ -1,0 +1,7 @@
+{
+  "name": "sublimation-for-wasm-shell",
+  "private": true,
+  "version": "0.0.1",
+  "description": "SfW Phase 0 shell: run Sublimation-compiled JS inside QuickJS-in-WASM",
+  "main": "js/wasm-runtime.js"
+}
