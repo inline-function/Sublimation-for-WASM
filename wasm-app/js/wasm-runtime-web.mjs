@@ -126,19 +126,12 @@ export async function run(appJsUrl, opts) {
     vm.setProp(sublObj, "call", callFn);
     vm.setProp(vm.global, "__subl", sublObj);
 
-    // 过渡兼容：裸名别名（同一注册表派生；-A/预 t37 产物用，t37 落定后移除）
+    // @host 裸名通道（生成器当前形态：用户 @host 声明在 browser/wasm 仍出裸名调用；
+    // 同一注册表派生；待生成器统一到 __subl.call 后移除——t40 已实测确认并报队长）
     for (const op of Object.keys(OPS)) {
         const alias = keep(vm.newFunction(op, (...hs) => OPS[op](vm, hs)));
         vm.setProp(vm.global, op, alias);
     }
-    // 过渡兼容：console.log（-A 路线 print 旧落地点）
-    const consoleObj = keep(vm.newObject());
-    const logFn = keep(vm.newFunction("log", (...args) => {
-        emitLine(args.map((a) => { try { return vm.dump(a); } catch (e) { return String(a); } }).join(" "));
-    }));
-    vm.setProp(consoleObj, "log", logFn);
-    vm.setProp(vm.global, "console", consoleObj);
-
     // C1：取产物（fetch 文本）
     let code;
     try {

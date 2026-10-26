@@ -56,6 +56,13 @@ function Sync-Tree($src, $dst) {
 }
 
 Sync-Tree (Join-Path $main "core") (Join-Path $repoRoot "core")
+# wasm 目标（--target=wasm）下 core/io 与 core/net 不可用
+# （Target.kt 的 Platform.MODULE_AVAILABILITY），app 副本不挂载这两个模块；
+# 仓根 ./core（处理器脚本 stdlib）按主仓原样保留。
 Sync-Tree (Join-Path $main "core") (Join-Path $repoRoot "app\core")
+foreach ($m in @("io", "net")) {
+    $p = Join-Path $repoRoot ("app\core\" + $m)
+    if (Test-Path $p) { Remove-Item $p -Recurse -Force; Write-Output "app/core/$m pruned (wasm target unavailable)" }
+}
 
 Write-Host "[sync-deps] 完成"

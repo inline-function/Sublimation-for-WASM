@@ -2,8 +2,11 @@
 
 这个工程让 Sublimation 获得运行在 WebAssembly 上的能力。
 
-**现状**：Phase 0（-A 路线验证）✓ → **Phase 1 投产化** ✓（宿主规范 v1、wasm 标准库层、
-可部署物打包链、18 项冒烟回归）→ 等 t35 的 `--target=wasm`（S-1 导出；宿主已双路线兼容）。
+**现状**：Phase 0 ✓ → Phase 1 ✓ → **主链路已切 `--target=wasm`**（t40，fat jar 实测）：
+宿主桥 ABI 单入口 `__subl.call`（内建桥 op）+ S-1 导出（main 不自执行，宿主调用）。
+编译器（t43 落定，fat jar 实测）**桥调用一律 `__subl.call`**：内建桥 op 与用户
+`@host` 无体声明统一单入口（op = 声明名）；宿主不注入任何桥全局名
+（t40 时期的裸名别名已回撤）。
 
 - 路线决策与 Phase 1 现状：[wasm doc/路线选型.md](wasm%20doc/路线选型.md)
 - 宿主规范（用户要求的 pending-jobs 驱动契约所在）：[wasm doc/宿主规范.md](wasm%20doc/宿主规范.md)
@@ -18,7 +21,7 @@
 | wasm-app/ | 壳工程：QuickJS-in-WASM 宿主（js/wasm-runtime.js Node 主路径 + js/wasm-runtime-web.mjs 浏览器入口）+ vendor/quickjs 供应商件 + 打包脚本 |
 | app/ | 编译输入：演示程序（main.subl）+ 桥接标准库层（wasm.subl/storage.subl/net.subl）+ core/ 副本 |
 | annotation processer/ | wasm.subs 处理器（@wasm 白名单 10 名 + 态度校验 + @postcompile build 打包钩子） |
-| test/ | smoke-test.js：wasm 宿主装载演示的冒烟回归（18 项：Phase 0 基线 + Phase 1 存储） |
+| test/ | smoke-test.js：真实产物装载回归（18 项）；dispatch-abi-test.js：`__subl.call` 单入口 + S-1 导出 + 未知 op 拒绝契约（13 项） |
 | scripts/ | sync-deps.ps1：从主仓同步 core/（真源=主仓） |
 | core/ | 处理器脚本的 stdlib 本地副本（不入库；由 scripts/sync-deps.ps1 同步） |
 
@@ -32,28 +35,35 @@
 
 ## 端到端流程
 
-    cd F:SublimationProjectsublimation for wasm
-    F:KotlinProjectSublimationcliuildinstallcliincli.bat compile app ^
-        -o wasm-appuildapp.js ^
-        -A wasmApp=wasm-app -A wasmJs=wasm-appuildapp.js
-    node wasm-appuildwasmun.js     # 部署物 Node 入口（默认装同目录 app.js）
-    node wasm-appjswasm-runtime.js    # 或直接跑宿主（默认装 build/wasm/app.js）
-    node testsmoke-test.js             # 冒烟回归
+    cd F:\SublimationProject\sublimation for wasm
+    # 主仓 fat jar（release/sublimation.jar；t37 后形态）
+    java -jar F:\KotlinProject\Sublimation\release\sublimation.jar compile app ^
+        -o wasm-app\build\app.js --target=wasm ^
+        -A wasmApp=wasm-app -A wasmJs=wasm-app\build\app.js
+    node wasm-app\build\wasm\run.js      # 部署物 Node 入口（默认装同目录 app.js）
+    node wasm-app\js\wasm-runtime.js     # 或直接跑宿主（默认装 build/wasm/app.js）
+    node test\smoke-test.js               # 冒烟回归（18 项）
+    node test\dispatch-abi-test.js        # ABI 契约回归（13 项）
 
-1. **语义检查 + JS 生成**：`@wasm @host` 无体桥接声明经 wasm.subs 白名单校验（10 名），
-   调用点翻成裸名全局 JS 调用。
+1. **语义检查 + JS 生成**：`@wasm @host` 无体桥接声明经 wasm.subs 的 op 白名单校验（10 名）；
+   `--target=wasm` 下桥调用点（内建桥 op 与 `@host` 无体声明）一律翻成
+   `globalThis.__subl.call(op, args)`；产物导出 `globalThis.__subl.main`（S-1，不自执行）。
+   wasm 目标对 core/io、core/net
+   做模块级编译期拒绝，app/core 副本不挂载这两包（sync-deps 自动剪除）。
 2. **编译后阶段**（`@postcompile build`）：组装自包含可部署物 `build/wasm/`——
    app.js + js/ 宿主 + vendor/quickjs 运行时 + index.html + run.js + README.txt。
-3. **运行**：宿主按规范 v1 装载（C1 装载 → C2 桥接注入 → evalCode → S-1 兼容检查 →
+3. **运行**：宿主按规范 v1.1 装载（C1 装载 → C2 桥接注入 → evalCode → S-1 兼容检查 →
    C3 pending-jobs 抽干 → C4 handle 回收 → 结构化结果）。
 
 演示程序（app/main.subl）：fib(25)、链表平方与求和、存储桥往返（store/load/keys/has/remove）、
 宿主桥示范（wasmName/wasmTimeMs/wasmEnv）。
 
-## 宿主桥 ABI（t38 定案）
+## 宿主桥 ABI（t38 定案；t43 全链路统一）
 
-**唯一入口：**`globalThis.__subl.call(op, args)` 单入口 dispatch（编译器产物 +
-wasm 宿主 + 处理器 op 白名单三方对齐；裸名直挂已作废，过渡期保留别名）。
+**唯一入口：**`globalThis.__subl.call(op, args)` 单入口 dispatch（编译器内建桥 op +
+用户 `@host` 无体声明 + wasm 宿主 OPS 注册表 + 处理器 op 白名单四方对齐；
+编译器 t43 已把 `@host` 统一进单入口，宿主不注入任何桥全局名——t40 时期的裸名
+别名已回撤）。console.log 垒片亦已移除（wasm 产物不再引用 console）。
 op 表（与 wasm.subs 白名单一一对应）：
 
 | 类别 | op 名 |

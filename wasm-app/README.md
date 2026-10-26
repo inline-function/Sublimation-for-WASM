@@ -50,8 +50,8 @@ op 表（与 annotation processer/wasm.subs 的 op 白名单一一对应）：
 | wasmStorageLoad/Store/Has/Remove/Keys/Clear | 进程内 Map（浏览器宿主=localStorage） |
 | wasmFetch（前瞻） | 明确错误「暂不可用」（宿主规范 §6） |
 
-过渡兼容（同一注册表派生，t37 落定后移除）：裸名别名（-A/预 t37 产物仍以裸名调用
-`@host` 桥）+ `console.log` 垫片（-A 路线 print 的旧落地点）。
+桥全局零暴露：编译器（t43）把用户 `@host` 无体声明也统一生成单入口调用，
+宿主只经 `__subl.call` 暴露能力（t40 过渡期的裸名别名与 console.log 垒片均已回撤）。
 
 **未提供**（平台边界，见 wasm doc/平台边界.md）：fs 四件套、getArgs、readLine、sleep。
 

@@ -12,8 +12,9 @@
 //     唯一入口：globalThis.__subl.call(op, args)——op 为操作名（Str），args 为
 //     Sublimation 实参数组（List）。宿主侧用一个 op 注册表（OPS，单一真源）实现，
 //     op 名与编译器桥分派一致（print 的 op 为 "println"）。
-//     过渡兼容：预 t37 编译器产物仍以裸名调用与 console.log 输出，宿主自动从同一
-//     注册表派生裸名别名与 console.log 垫片（别名单一真源，不另写实现；t37 落定后移除）。
+//     桥调用一律经 __subl.call（编译器内建桥 op + 用户 @host 无体声明，
+//     t43 已统一生成 __subl.call("<声明名>", [args])）。宿主不向 VM 注入任何
+//     桥全局名（t40 曾临时保留的裸名别名已回撤）。
 //     桥返回值只允许原语（Str/Nat/Int/Rat/Bool/Null）或句柄（Optional/List/结构体）。
 //  C3 pending-jobs 驱动契约（wasm 无隐式事件循环，main 恒 async）
 //     evalCode 之后宿主必须循环：while (runtime.hasPendingJob())
@@ -168,21 +169,6 @@ async function run(appJsPath, opts) {
         vm.setProp(sublObj, "call", callFn);
         vm.setProp(vm.global, "__subl", sublObj);
         // 编译器 S-1 导出会合并进这个对象：(globalThis.__subl || ...).main = …
-
-        // ---- 过渡兼容：裸名别名（-A 路线产物以裸名调用；同一注册表派生，t37 后移除）----
-        // 注意：newFunction 回调实参句柄归 FFI，别名路径不经 argRun（不 dispose）
-        for (const op of Object.keys(OPS)) {
-            const alias = reg.keep(vm.newFunction(op, (...hs) => OPS[op](vm, reg, hs)));
-            vm.setProp(vm.global, op, alias);
-        }
-
-        // ---- 过渡兼容：console.log（-A 路线 print 旧落地点，同走 emitLine）----
-        const consoleObj = reg.keep(vm.newObject());
-        const logFn = reg.keep(vm.newFunction("log", (...args) => {
-            emitLine(args.map((a) => { try { return vm.dump(a); } catch (e) { return String(a); } }).join(" "));
-        }));
-        vm.setProp(consoleObj, "log", logFn);
-        vm.setProp(vm.global, "console", consoleObj);
 
         // ---- C1：求值产物 ----
         let error = null;
