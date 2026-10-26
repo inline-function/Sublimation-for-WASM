@@ -50,6 +50,20 @@
 演示程序（app/main.subl）：fib(25)、链表平方与求和、存储桥往返（store/load/keys/has/remove）、
 宿主桥示范（wasmName/wasmTimeMs/wasmEnv）。
 
+## 宿主桥 ABI（t38 定案）
+
+**唯一入口：**`globalThis.__subl.call(op, args)` 单入口 dispatch（编译器产物 +
+wasm 宿主 + 处理器 op 白名单三方对齐；裸名直挂已作废，过渡期保留别名）。
+op 表（与 wasm.subs 白名单一一对应）：
+
+| 类别 | op 名 |
+| --- | --- |
+| 输出（编译器桥分派） | `println`（`print` 映射于此）、`print` |
+| 命令行 / 等待 | `getArgs`（可用）、`sleep`（wasm 同步宿主不可用） |
+| `@wasm @host` 桥 | `wasmName`/`wasmTimeMs`/`wasmEnv`、`wasmStorage*(6)`、`wasmFetch`（前瞻） |
+
+详见 `wasm doc/宿主规范.md`（C2 契约 v1.1）与 `wasm doc/平台边界.md`。
+
 ## wasm 目标标准库层（app/*.subl）
 
 | 文件 | 内容 |

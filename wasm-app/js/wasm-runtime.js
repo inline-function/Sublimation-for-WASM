@@ -1,30 +1,29 @@
 "use strict";
-// wasm-runtime.js —— SfW 宿主（Phase 1 投产版）：把 Sublimation 编译产物跑进 QuickJS-in-WASM
+// wasm-runtime.js —— SfW 宿主（t38：宿主桥 ABI 统一版）：把 Sublimation 编译产物跑进 QuickJS-in-WASM
 //
 //  ============================================================================
-//  Target.Wasm 宿主规范 v1（速查；完整版 wasm doc/宿主规范.md）
+//  Target.Wasm 宿主规范 v1.1（速查；完整版 wasm doc/宿主规范.md）
 //  ============================================================================
 //  C1 装载契约
 //     实例化 wasm 模块（newQuickJSWASMModuleFromVariant）→ newContext →
-//     注入桥接 → evalCode(产物) → [若产物导出 __subl 则由宿主调 __subl.main()]
-//     → 驱动 pending jobs → 释放全部 handle → 销毁上下文。
-//  C2 桥接契约
-//     @wasm @host 无体声明被编译器翻成**裸名全局 JS 调用**；宿主以
-//     vm.setProp(vm.global, <name>, vm.newFunction(...)) 注入同名全局；
-//     返回值只允许原语（Str/Nat/Int/Rat/Bool/Null）或句柄（Optional/List/结构体）。
+//     注入桥接（C2）→ evalCode(产物) → [若产物导出 __subl.main 则由宿主调用]
+//     → 驱动 pending jobs（C3）→ 释放全部 handle（C4）。
+//  C2 桥接契约（t38 定案 ABI）
+//     唯一入口：globalThis.__subl.call(op, args)——op 为操作名（Str），args 为
+//     Sublimation 实参数组（List）。宿主侧用一个 op 注册表（OPS，单一真源）实现，
+//     op 名与编译器桥分派一致（print 的 op 为 "println"）。
+//     过渡兼容：预 t37 编译器产物仍以裸名调用与 console.log 输出，宿主自动从同一
+//     注册表派生裸名别名与 console.log 垫片（别名单一真源，不另写实现；t37 落定后移除）。
+//     桥返回值只允许原语（Str/Nat/Int/Rat/Bool/Null）或句柄（Optional/List/结构体）。
 //  C3 pending-jobs 驱动契约（wasm 无隐式事件循环，main 恒 async）
 //     evalCode 之后宿主必须循环：while (runtime.hasPendingJob())
-//       runtime.executePendingJobs(N) —— 返回执行数或错误对象；
-//     唤醒次数与总任务数都有上限，超限视为不收敛（死循环嫌疑）报错；
-//     异步桥接（@async）若要可等待，需 asyncify 变体或 deferred-promise 协议（见规范 §6）。
+//       runtime.executePendingJobs(N)；有唤醒/总数上限，超限按不收敛报错（C5）。
 //  C4 handle 契约
-//     宿主创建的每个 handle（newObject/newFunction/newArray/evalCode 结果/
-//     getProp/callFunction 结果）必须被 dispose；用注册表统一回收，
-//     否则 vm.dispose() 时 QuickJS 触发 list_empty(&rt->gc_obj_list) 断言 abort。
+//     宿主创建的每个 handle 必须被 dispose；用注册表（HandleRegistry）统一回收；
+//     newFunction 回调收到的实参句柄归 FFI 拥有，不得 dispose。
 //  C5 错误契约
-//     结果分类：load（模块装载）/eval（求值期）/pending（异步任务期）/host（宿主自身）；
-//     平台不可用能力必须以明确错误暴露（不静默吞）；本宿主对未实现桥（如 wasmFetch）
-//     抛带说明的同步错误。
+//     结果分类：ok/load/eval/pending/host；未知 op 抛明确错误；平台不可用能力
+//     （sleep/wasmFetch）以明确错误暴露，不静默吞。
 //  ============================================================================
 //
 // 用法：node wasm-runtime.js [app.js 路径]（默认 ../build/wasm/app.js 或 $SFW_APP_JS）
@@ -38,13 +37,13 @@ const RELEASE_SYNC = require(path.join(VENDOR_NM, "@jitl", "quickjs-wasmfile-rel
 
 // ---- 宿主规范 v1 默认值 ----
 const SPEC = {
-    maxWakeups: 4096,          // C3：pending-jobs 唤醒上限
-    maxJobsPerWakeup: 2048,    // C3：每轮最多执行的任务数
-    maxTotalJobs: 2000000,     // C3：总任务上限（不收敛保护）
-    memoryLimitBytes: 256 * 1024 * 1024, // C5：wasm 堆上限（QuickJS 32 位地址空间内）
+    maxWakeups: 4096,
+    maxJobsPerWakeup: 2048,
+    maxTotalJobs: 2000000,
+    memoryLimitBytes: 256 * 1024 * 1024,
 };
 
-// 宿主侧环境表：wasmEnv(key) 从这里取（演示宿主注入的环境）
+// 宿主侧环境表：wasmEnv op 从这里取（演示宿主注入的环境）
 const HOST_ENV = {
     phase: "1",
     shell: "sfw",
@@ -52,7 +51,8 @@ const HOST_ENV = {
     lang: "sublimation",
 };
 
-// 宿主侧存储（C2 落地）：Node 宿主=进程内 Map；浏览器宿主应换成 localStorage/IndexedDB
+// 宿主侧存储（wasmStorage* op 的落地）：Node 宿主=进程内 Map；
+// 浏览器宿主应换成 localStorage/IndexedDB（见 wasm-runtime-web.mjs）
 const storage = new Map();
 
 // ---- 句柄注册表（C4）----
@@ -67,15 +67,29 @@ class HandleRegistry {
     }
 }
 
+// 从实参数组句柄提取元素句柄（getProp 产物，归调用方，必须 dispose）
+function argHandles(vm, argsH) {
+    const hs = [];
+    let lenH = null;
+    try {
+        lenH = vm.getProp(argsH, "length");
+        const n = vm.getNumber(lenH);
+        for (let i = 0; i < n; i++) hs.push(vm.getProp(argsH, String(i)));
+        return hs;
+    } finally {
+        if (lenH) try { lenH.dispose(); } catch (e) { /* */ }
+    }
+}
+
 async function run(appJsPath, opts) {
     opts = opts || {};
     const spec = Object.assign({}, SPEC, opts.spec || {});
     const code = fs.readFileSync(appJsPath, "utf8");
     const lines = [];
     const out = opts.onLine || ((s) => { process.stdout.write(s + "\n"); });
+    const emitLine = (s) => { lines.push(s); if (!opts.silent) out(s); };
 
     let vm = null;
-    const handles = null;
     try {
         // ---- C1：实例化模块 + 建上下文 ----
         const QuickJS = await newQuickJSWASMModuleFromVariant(RELEASE_SYNC);
@@ -84,68 +98,91 @@ async function run(appJsPath, opts) {
 
         const reg = new HandleRegistry(vm);
 
-        // ---- C2：注入桥接 ----
-        // console.log：Sublimation print 的落地（codegen: console.log(__dshtoStr(v))）
-        const consoleObj = reg.keep(vm.newObject());
-        const logFn = reg.keep(vm.newFunction("log", (...args) => {
-            const parts = args.map((a) => {
-                try { return vm.dump(a); } catch (e) { return String(a); }
-            });
-            const line = parts.join(" ");
-            lines.push(line);
-            if (!opts.silent) out(line);
-        }));
-        vm.setProp(consoleObj, "log", logFn);
-        vm.setProp(vm.global, "console", consoleObj);
-
-        installBridge(vm, reg, "wasmName", () => vm.newString("quickjs-emscripten 0.32.0 (QuickJS in WebAssembly)"));
-        installBridge(vm, reg, "wasmTimeMs", () => vm.newNumber(Date.now()));
-        installBridge(vm, reg, "wasmEnv", (k) => {
-            const key = vm.getString(k);
-            return vm.newString(String(HOST_ENV[key] != null ? HOST_ENV[key] : "<undefined:" + key + ">"));
-        });
-
-        // 存储桥（app/storage.subl）：Optional/List 用与编译器一致的 JS 形状构造
-        installBridge(vm, reg, "wasmStorageLoad", (k) => {
-            const key = vm.getString(k);
-            const v = storage.get(key);
-            if (v == null) {
-                const n = reg.keep(vm.newObject());
-                vm.setProp(n, "tag", reg.keep(vm.newString("None")));
-                return n;
-            }
+        // ---- C2：op 注册表（宿主桥单一真源）----
+        // 签名：impl(vm, reg, hs) —— hs 为实参 QuickJS 句柄数组
+        // 返回：原语自动装箱，或宿主构造的句柄（Optional/List/结构体）
+        const someBox = (v) => {
             const s = reg.keep(vm.newObject());
             vm.setProp(s, "tag", reg.keep(vm.newString("Some")));
             vm.setProp(s, "0", reg.keep(vm.newString(v)));
             return s;
-        });
-        installBridge(vm, reg, "wasmStorageStore", (k, v) => {
-            storage.set(vm.getString(k), vm.getString(v));
-            return vm.undefined;
-        });
-        installBridge(vm, reg, "wasmStorageHas", (k) => (storage.has(vm.getString(k)) ? vm.true : vm.false));
-        installBridge(vm, reg, "wasmStorageRemove", (k) => {
-            storage.delete(vm.getString(k));
-            return vm.undefined;
-        });
-        installBridge(vm, reg, "wasmStorageKeys", () => {
-            const arr = reg.keep(vm.newArray());
-            let i = 0;
-            for (const key of storage.keys()) {
-                vm.setProp(arr, i, reg.keep(vm.newString(key)));
-                i++;
-            }
-            return arr;
-        });
-        installBridge(vm, reg, "wasmStorageClear", () => {
-            storage.clear();
-            return vm.undefined;
-        });
+        };
+        const noneBox = () => {
+            const n = reg.keep(vm.newObject());
+            vm.setProp(n, "tag", reg.keep(vm.newString("None")));
+            return n;
+        };
 
-        // 网络前瞻声明（app/net.subl）：本阶段明确「不可用」（C5）
-        installBridge(vm, reg, "wasmFetch", () => {
-            throw new Error("[SfW] wasmFetch 暂不可用：同步宿主无法等待网络 IO；落地需 asyncify 变体或 deferred-promise 协议（见 wasm doc/宿主规范.md §6）");
-        });
+        const OPS = {
+            // 输出（编译器把 print 映射为 op "println"；参数已在编译期 __dshtoStr）
+            println: (vm, reg, hs) => { emitLine(hs.map((h) => { try { return vm.dump(h); } catch (e) { return String(h); } }).join(" ")); return vm.undefined; },
+            print: (vm, reg, hs) => OPS.println(vm, reg, hs),
+            // 命令行参数（宿主注入，opts.appArgs）
+            getArgs: (vm, reg, hs) => {
+                const arr = reg.keep(vm.newArray());
+                (opts.appArgs || []).forEach((s, i) => vm.setProp(arr, String(i), reg.keep(vm.newString(String(s)))));
+                return arr;
+            },
+            // 定时等待：同步 wasm 宿主不可用（宿主规范 §6）
+            sleep: (vm, reg, hs) => { throw new Error("[SfW] op sleep 在 wasm 同步宿主下不可用：需 asyncify 变体或 deferred-promise 协议（宿主规范 §6）"); },
+            // ---- @wasm @host 桥（app/*.subl；op 名 = 声明函数名）----
+            wasmName: (vm, reg, hs) => vm.newString("quickjs-emscripten 0.32.0 (QuickJS in WebAssembly)"),
+            wasmTimeMs: (vm, reg, hs) => vm.newNumber(Date.now()),
+            wasmEnv: (vm, reg, hs) => {
+                const key = vm.getString(hs[0]);
+                return vm.newString(String(HOST_ENV[key] != null ? HOST_ENV[key] : "<undefined:" + key + ">"));
+            },
+            wasmStorageLoad: (vm, reg, hs) => {
+                const v = storage.get(vm.getString(hs[0]));
+                return v == null ? noneBox() : someBox(v);
+            },
+            wasmStorageStore: (vm, reg, hs) => { storage.set(vm.getString(hs[0]), vm.getString(hs[1])); return vm.undefined; },
+            wasmStorageHas: (vm, reg, hs) => (storage.has(vm.getString(hs[0])) ? vm.true : vm.false),
+            wasmStorageRemove: (vm, reg, hs) => { storage.delete(vm.getString(hs[0])); return vm.undefined; },
+            wasmStorageKeys: (vm, reg, hs) => {
+                const arr = reg.keep(vm.newArray());
+                let i = 0;
+                for (const key of storage.keys()) { vm.setProp(arr, String(i), reg.keep(vm.newString(key))); i++; }
+                return arr;
+            },
+            wasmStorageClear: (vm, reg, hs) => { storage.clear(); return vm.undefined; },
+            // 网络前瞻声明（app/net.subl）：明确「不可用」
+            wasmFetch: (vm, reg, hs) => { throw new Error("[SfW] op wasmFetch 暂不可用：同步宿主无法等待网络 IO；落地见宿主规范 §6"); },
+        };
+
+        const dispatcher = (opH, argsH) => {
+            const op = vm.getString(opH);
+            const impl = OPS[op];
+            if (!impl) throw new Error("[SfW] 未知宿主桥 op：" + op + "（op 表见 wasm doc/平台边界.md §1）");
+            return argRun(argsH, impl);
+        };
+        // 提取（owned）→ 调用 → 释放（C4）
+        function argRun(argsH, impl) {
+            const hs = argHandles(vm, argsH);
+            try { return impl(vm, reg, hs); } finally { for (const h of hs) try { h.dispose(); } catch (e) { /* */ } }
+        }
+
+        // ---- C2：安装 globalThis.__subl.call（唯一 ABI 入口）----
+        const sublObj = reg.keep(vm.newObject());
+        const callFn = reg.keep(vm.newFunction("call", dispatcher));
+        vm.setProp(sublObj, "call", callFn);
+        vm.setProp(vm.global, "__subl", sublObj);
+        // 编译器 S-1 导出会合并进这个对象：(globalThis.__subl || ...).main = …
+
+        // ---- 过渡兼容：裸名别名（-A 路线产物以裸名调用；同一注册表派生，t37 后移除）----
+        // 注意：newFunction 回调实参句柄归 FFI，别名路径不经 argRun（不 dispose）
+        for (const op of Object.keys(OPS)) {
+            const alias = reg.keep(vm.newFunction(op, (...hs) => OPS[op](vm, reg, hs)));
+            vm.setProp(vm.global, op, alias);
+        }
+
+        // ---- 过渡兼容：console.log（-A 路线 print 旧落地点，同走 emitLine）----
+        const consoleObj = reg.keep(vm.newObject());
+        const logFn = reg.keep(vm.newFunction("log", (...args) => {
+            emitLine(args.map((a) => { try { return vm.dump(a); } catch (e) { return String(a); } }).join(" "));
+        }));
+        vm.setProp(consoleObj, "log", logFn);
+        vm.setProp(vm.global, "console", consoleObj);
 
         // ---- C1：求值产物 ----
         let error = null;
@@ -157,7 +194,7 @@ async function run(appJsPath, opts) {
             try { result.value.dispose(); } catch (e) { /* */ }
         }
 
-        // ---- C1：S-1 兼容（--target=wasm 落地后：产物导出 __subl，宿主调 main()）----
+        // ---- C1：S-1 兼容（--target 产物导出 __subl.main，宿主调用之）----
         if (!error) {
             error = tryCallExportedMain(vm, reg);
         }
@@ -173,30 +210,28 @@ async function run(appJsPath, opts) {
         reg.disposeAll();
         vm.dispose();
         vm = null;
-        return { ok: !error, kind: error ? error.kind || "eval" : "ok", error: error ? error.message || error : null, lines: lines, jobs: jobsExecuted };
+        return { ok: !error, kind: error ? (error.kind || "eval") : "ok", error: error ? (error.message || error) : null, lines: lines, jobs: jobsExecuted };
     } catch (e) {
         if (vm) { try { vm.dispose(); } catch (e2) { /* */ } }
         return { ok: false, kind: "host", error: (e && e.message ? e.message : String(e)), lines: lines, jobs: 0 };
     }
 }
 
-function installBridge(vm, reg, name, fn) {
-    const h = reg.keep(vm.newFunction(name, fn));
-    vm.setProp(vm.global, name, h);
-}
-
-// S-1 兼容：若产物声明 globalThis.__subl（编译器 --target 落地后的导出面），
-// 由宿主调用 __subl.main()；今天的 -A 路线产物是自执行 IIFE，无导出 → 跳过。
+// S-1 兼容：若产物声明了 __subl.main（编译器 --target 落地后的导出面），
+// 由宿主调用之；-A 路线产物无导出 main → 跳过。
 function tryCallExportedMain(vm, reg) {
     let sublH = null;
     try {
         sublH = vm.getProp(vm.global, "__subl");
-        const dumped = vm.dump(sublH);
-        if (dumped === undefined || dumped === null) return null;
-        const mainH = reg.keep(vm.getProp(sublH, "main"));
+        const mainH = vm.getProp(sublH, "main");
+        if (vm.typeof(mainH) !== "function") { try { mainH.dispose(); } catch (e) { /* */ } return null; }
         const callRes = vm.callFunction(mainH, vm.undefined);
+        try { mainH.dispose(); } catch (e) { /* */ }
         if (callRes.error) {
-            try { return { kind: "eval", message: "__subl.main() 抛出: " + vm.dump(callRes.error) }; } finally { try { callRes.error.dispose(); } catch (e) { /* */ } }
+            let msg = null;
+            try { msg = vm.dump(callRes.error); } catch (e) { msg = String(callRes.error); }
+            if (callRes.error.dispose) try { callRes.error.dispose(); } catch (e) { /* */ }
+            return { kind: "eval", message: "__subl.main() 抛出: " + (msg && msg.message ? msg.message : msg) };
         }
         if (callRes.value && callRes.value.dispose) try { callRes.value.dispose(); } catch (e) { /* */ }
         return null;

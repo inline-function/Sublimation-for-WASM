@@ -37,14 +37,21 @@ const r = await run("build/wasm/app.js", { silent: true, onLine: cb, spec: {...}
 // r = { ok, kind: "ok"|"load"|"eval"|"pending"|"host", error, lines, jobs }
 ```
 
-## 宿主桥接（对应 app/*.subl 的 @wasm @host 声明）
+## 宿主桥接（t38 定案 ABI：__subl.call 单入口）
 
-| Sublimation 声明 | 宿主实现 |
+宿主安装 `globalThis.__subl.call(op, args)`，内部用 op 注册表（OPS，单一真源）分派；
+op 表（与 annotation processer/wasm.subs 的 op 白名单一一对应）：
+
+| op | 实现 |
 | --- | --- |
+| println/print | 输出行收集（编译器把 print 映射为 println） |
+| getArgs / sleep | 宿主注入参数 / 同步宿主不可用（明确错误） |
 | wasmName/wasmTimeMs/wasmEnv | 固定串 / Date.now() / 宿主环境表 |
 | wasmStorageLoad/Store/Has/Remove/Keys/Clear | 进程内 Map（浏览器宿主=localStorage） |
 | wasmFetch（前瞻） | 明确错误「暂不可用」（宿主规范 §6） |
-| print(v) | codegen → console.log；宿主注入 console.log 收集输出 |
+
+过渡兼容（同一注册表派生，t37 落定后移除）：裸名别名（-A/预 t37 产物仍以裸名调用
+`@host` 桥）+ `console.log` 垫片（-A 路线 print 的旧落地点）。
 
 **未提供**（平台边界，见 wasm doc/平台边界.md）：fs 四件套、getArgs、readLine、sleep。
 

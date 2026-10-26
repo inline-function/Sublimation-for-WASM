@@ -19,16 +19,16 @@ fun checkFuns(xs: List[Str]): Null =
 fun checkOne(fn: Str): Null {
     if (!funHasAnnotation(fn, "wasm")) null else {
         var anns: List[Str] = funAnnotations(fn);
-        checkWhitelist(fn);
+        checkOp(fn);
         checkHost(fn);
         checkImpure(fn, anns);
         checkNoBody(fn)
     }
 }
 
-fun checkWhitelist(fn: Str): Null {
-    if (isWasmBuiltin(fn)) null
-    else processorError("@wasm 函数 " + fn + " 不在宿主桥白名单内。白名单见 wasm doc/平台边界.md：wasmName/wasmTimeMs/wasmEnv、wasmStorage*(6)、wasmFetch(前瞻)")
+fun checkOp(fn: Str): Null {
+    if (isWasmOp(fn)) null
+    else processorError("@wasm 函数 " + fn + " 不在宿主桥 op 表内（op 名=声明的函数名）。op 表见 wasm doc/平台边界.md §1：wasmName/wasmTimeMs/wasmEnv、wasmStorage*(6)、wasmFetch(前瞻；println/print/getArgs/sleep 由编译器内建桥分派）")
 }
 
 fun checkHost(fn: Str): Null {
@@ -53,9 +53,10 @@ fun containsAnno(xs: List[Str], a: Str): Bool =
         else => false
     }
 
-fun isWasmBuiltin(fn: Str): Bool =
+fun isWasmOp(fn: Str): Bool =
     when (fn) {
-        // 宿主信息与能力（app/wasm.subl；宿主实现见 wasm-app/js/wasm-runtime.js）
+        // 宿主信息与能力（app/wasm.subl；宿主 __subl.call 的 op 实现见 wasm-runtime.js）
+        // 注：println/print/getArgs/sleep 由编译器内建桥分派（BRIDGE_OPS），不在此列
         "wasmName" => true
         "wasmTimeMs" => true
         "wasmEnv" => true
