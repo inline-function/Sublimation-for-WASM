@@ -1,0 +1,61 @@
+// main.subl —— SfW 最小完整 demo：hello-subl
+//
+// 目的：证明 Sublimation --target=wasm 编译产物能在 WebAssembly（QuickJS-in-WASM）里
+// 跑起来并**打印输出**。刻意用最小而典型的语言特性：
+//   - 递归（阶乘）
+//   - 链表 List + when 模式匹配（过滤/映射/求和）
+//   - 元组与简单算术（点积）
+//   - 宿主桥 wasmName/wasmEnv/wasmTimeMs（@wasm @host 无体声明 → __subl.call 分派）
+//
+// 纯逻辑（本文件几乎全部）与副作用（main 里的 print/桥调用）分离：
+// print 是编译器内建桥 op（映射 println），宿主收走输出行。
+
+// ---------- 阶乘（递归：参数 n - 1 严格变小，过停期检查） ----------
+fun fact(n: Nat): Nat = if (n < 2) 1 else n * fact(n - 1)
+
+// ---------- 链表处理（when 模式匹配：Nil / Cons 头尾） ----------
+fun doubleAll(xs: List[Nat]): List[Nat] = when (xs) {
+    Nil => Nil()
+    is Cons(h, t) => Cons(h * 2, doubleAll(t))
+}
+
+fun sumOf(xs: List[Nat]): Nat = when (xs) {
+    Nil => 0
+    is Cons(h, t) => h + sumOf(t)
+}
+
+fun evensOf(xs: List[Nat]): List[Nat] = when (xs) {
+    Nil => Nil()
+    is Cons(h, t) => if (h % 2 == 0) Cons(h, evensOf(t)) else evensOf(t)
+}
+
+// ---------- 元组与简单算术：三维点积 ----------
+fun dot(p: (Nat, Nat, Nat), q: (Nat, Nat, Nat)): Nat =
+    when (p) {
+        (px, py, pz) => when (q) {
+            (qx, qy, qz) => (px * qx) + ((py * qy) + (pz * qz))
+            else => 0
+        }
+        else => 0
+    }
+
+@impure
+fun main(): Null {
+    print("hello from Sublimation, running inside WebAssembly (QuickJS)")
+    print(concat("fact(5) = ", toStr(fact(5))))
+    print(concat("fact(10) = ", toStr(fact(10))))
+    var xs: List[Nat] = Cons(1, Cons(2, Cons(3, Cons(4, Cons(5, Nil())))))
+    print(concat("list = ", toStr(xs)))
+    print(concat("doubled = ", toStr(doubleAll(xs))))
+    print(concat("evens = ", toStr(evensOf(xs))))
+    print(concat("sum = ", toStr(sumOf(xs))))
+    print(concat("dot((1,2,3),(4,5,6)) = ", toStr(dot((1, 2, 3), (4, 5, 6)))))
+    // ---- 宿主桥（@wasm @host 声明 → __subl.call 单入口） ----
+    print(concat("host = ", wasmName()))
+    print(concat("env target = ", wasmEnv("target")))
+    var t0: Nat = wasmTimeMs()
+    var f: Nat = fact(20)
+    print(concat("fact(20) = ", toStr(f)))
+    print(concat("elapsed ms = ", toStr(wasmTimeMs() - t0)))
+    null
+}

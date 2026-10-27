@@ -20,6 +20,7 @@
 | wasm doc/ | 路线选型 / 宿主规范 v1 / 平台边界 / Phase 0 验证记录 |
 | wasm-app/ | 壳工程：QuickJS-in-WASM 宿主（js/wasm-runtime.js Node 主路径 + js/wasm-runtime-web.mjs 浏览器入口）+ vendor/quickjs 供应商件 + 打包脚本 |
 | app/ | 编译输入：演示程序（main.subl）+ 桥接标准库层（wasm.subl/storage.subl/net.subl）+ core/ 副本 |
+| wasm-app/demo/ | 最小完整 demo：hello-subl（一个 .subl → wasm 里跑出打印输出；demo/README.md） |
 | annotation processer/ | wasm.subs 处理器（@wasm 白名单 10 名 + 态度校验 + @postcompile build 打包钩子） |
 | test/ | smoke-test.js：真实产物装载回归（18 项）；dispatch-abi-test.js：`__subl.call` 单入口 + S-1 导出 + 未知 op 拒绝契约（13 项） |
 | scripts/ | sync-deps.ps1：从主仓同步 core/（真源=主仓） |

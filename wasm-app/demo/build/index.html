@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SfW wasm 应用</title>
+  <style>
+    body { font: 13px/1.5 monospace; margin: 16px; }
+    #output { white-space: pre-wrap; }
+    #status { color: #666; }
+  </style>
+</head>
+<body>
+  <div id="status">装载中…</div>
+  <pre id="output"></pre>
+  <script type="module">
+    import { run } from "./js/wasm-runtime-web.mjs";
+    const out = document.getElementById("output");
+    const status = document.getElementById("status");
+    run("./app.js", {
+      onLine: (line) => { out.textContent += line + "\n"; },
+    }).then((r) => {
+      status.textContent = r.ok ? "执行完成（" + r.jobs + " 个异步任务）" : "执行失败 (" + r.kind + ")";
+      if (!r.ok) out.textContent += "[error] " + (typeof r.error === "object" ? JSON.stringify(r.error) : r.error) + "\n";
+    }).catch((e) => {
+      status.textContent = "宿主错误";
+      out.textContent += "[host error] " + (e && e.stack ? e.stack : String(e));
+    });
+  </script>
+</body>
+</html>
